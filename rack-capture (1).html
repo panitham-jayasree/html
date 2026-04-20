@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Rack Capture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  :root {
+    --bg: #0a0a0f;
+    --text: #e8e8ed;
+    --text-dim: #7a7a8a;
+    --accent: #34d399;
+    --accent-dim: rgba(52,211,153,0.15);
+    --danger: #f87171;
+    --warn: #fbbf24;
+    --surface: rgba(255,255,255,0.06);
+    --border: rgba(255,255,255,0.08);
+  }
+
+  html, body {
+    height: 100%; width: 100%;
+    background: #000;
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    overflow: hidden;
+    position: fixed;
+    touch-action: none;
+  }
+
+  .screen { display: none; height: 100%; width: 100%; flex-direction: column; }
+  .screen.active { display: flex; }
+
+  /* ═══ CAMERA SCREEN ═══ */
+  #cameraScreen { position: relative; background: #000; }
+
+  #videoFeed { width: 100%; height: 100%; object-fit: cover; }
+
+  /* ── Dark mask around boundary box ── */
+  .mask-overlay {
+    position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  }
+
+  .mask-top, .mask-bottom, .mask-left, .mask-right {
+    position: absolute;
+    background: rgba(0,0,0,0.55);
+  }
+
+  .mask-top    { top: 0; left: 0; right: 0; height: 8%; }
+  .mask-bottom { bottom: 0; left: 0; right: 0; height: 18%; }
+  .mask-left   { top: 8%; bottom: 18%; left: 0; width: 6%; }
+  .mask-right  { top: 8%; bottom: 18%; right: 0; width: 6%; }
+
+  /* ── Boundary box ── */
+  .boundary-box {
+    position: absolute;
+    top: 8%; left: 6%; right: 6%; bottom: 18%;
+    z-index: 3; pointer-events: none;
+  }
+
+  .bbox-border {
+    position: absolute; inset: 0;
+    border: 2.5px solid var(--accent);
+    border-radius: 6px;
+    transition: border-color 0.3s;
+  }
+
+  /* Corner brackets */
+  .corner {
+    position: absolute; width: 28px; height: 28px; z-index: 1;
+  }
+
+  .corner::before, .corner::after {
+    content: ''; position: absolute;
+    background: var(--accent);
+    transition: background 0.3s;
+  }
+
+  .corner.tl { top: -2px; left: -2px; }
+  .corner.tl::before { top: 0; left: 0; width: 28px; height: 3px; border-radius: 2px 0 0 0; }
+  .corner.tl::after  { top: 0; left: 0; width: 3px; height: 28px; border-radius: 2px 0 0 0; }
+
+  .corner.tr { top: -2px; right: -2px; }
+  .corner.tr::before { top: 0; right: 0; width: 28px; height: 3px; }
+  .corner.tr::after  { top: 0; right: 0; width: 3px; height: 28px; }
+
+  .corner.bl { bottom: -2px; left: -2px; }
+  .corner.bl::before { bottom: 0; left: 0; width: 28px; height: 3px; }
+  .corner.bl::after  { bottom: 0; left: 0; width: 3px; height: 28px; }
+
+  .corner.br { bottom: -2px; right: -2px; }
+  .corner.br::before { bottom: 0; right: 0; width: 28px; height: 3px; }
+  .corner.br::after  { bottom: 0; right: 0; width: 3px; height: 28px; }
+
+  /* Center crosshair */
+  .crosshair-h, .crosshair-v {
+    position: absolute;
+    background: rgba(52,211,153,0.15);
+  }
+
+  .crosshair-h {
+    left: 0; right: 0;
+    top: 50%; height: 1px;
+  }
+
+  .crosshair-v {
+    top: 0; bottom: 0;
+    left: 50%; width: 1px;
+  }
+
+  /* "Fit rack here" label */
+  .bbox-label {
+    position: absolute;
+    top: -26px; left: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--accent);
+    opacity: 0.8;
+  }
+
+  .bbox-sublabel {
+    position: absolute;
+    bottom: -22px; left: 0; right: 0;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; letter-spacing: 1px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.35);
+  }
+
+  /* ── Condition pills (top bar) ── */
+  .cond-bar {
+    position: absolute;
+    top: max(8px, env(safe-area-inset-top));
+    left: 8px; right: 8px;
+    z-index: 10;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    pointer-events: all;
+  }
+
+  .cond-pill {
+    display: flex; align-items: center; gap: 5px;
+    padding: 6px 10px;
+    border-radius: 20px;
+    background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.1);
+    cursor: pointer;
+    -webkit-user-select: none; user-select: none;
+    transition: all 0.25s;
+  }
+
+  .cond-pill:active { transform: scale(0.95); }
+
+  .cond-pill.checked {
+    background: rgba(52,211,153,0.2);
+    border-color: rgba(52,211,153,0.4);
+  }
+
+  .pill-dot {
+    width: 8px; height: 8px; min-width: 8px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255,255,255,0.3);
+    transition: all 0.2s;
+  }
+
+  .cond-pill.checked .pill-dot {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .pill-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.6);
+    transition: color 0.2s;
+  }
+
+  .cond-pill.checked .pill-label { color: var(--accent); }
+
+  /* ── Expanded condition detail ── */
+  .cond-detail {
+    position: absolute;
+    top: max(56px, calc(env(safe-area-inset-top) + 48px));
+    left: 12px; right: 12px;
+    z-index: 10;
+    background: rgba(0,0,0,0.8);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 12px 14px;
+    display: none;
+    pointer-events: all;
+  }
+
+  .cond-detail.visible { display: block; }
+
+  .detail-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  .detail-desc {
+    font-size: 13px; line-height: 1.4;
+    color: rgba(255,255,255,0.8);
+  }
+
+  /* ── Bottom controls ── */
+  .bottom-controls {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    z-index: 10;
+    padding: 16px 20px max(20px, env(safe-area-inset-bottom));
+    background: linear-gradient(to top, rgba(0,0,0,0.7) 60%, transparent);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .status-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; letter-spacing: 0.8px;
+    text-align: center;
+    transition: color 0.3s;
+  }
+
+  .status-text.pending { color: var(--warn); }
+  .status-text.ready { color: var(--accent); }
+
+  .capture-btn {
+    width: 70px; height: 70px;
+    border-radius: 50%;
+    border: 4px solid rgba(255,255,255,0.3);
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.3s;
+  }
+
+  .capture-btn::after {
+    content: '';
+    position: absolute; inset: 5px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.3);
+    transition: all 0.2s;
+  }
+
+  .capture-btn:active::after { inset: 9px; }
+
+  .capture-btn.enabled {
+    border-color: var(--accent);
+  }
+
+  .capture-btn.enabled::after {
+    background: var(--accent);
+  }
+
+  .capture-btn:disabled {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+
+  /* Flash */
+  .flash-overlay {
+    position: absolute; inset: 0;
+    background: #fff; z-index: 20;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.1s;
+  }
+
+  .flash-overlay.flash { opacity: 0.6; transition: none; }
+
+  /* ── Error state ── */
+  .error-state {
+    display: none; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100%; padding: 40px;
+    text-align: center; gap: 14px;
+    background: var(--bg);
+  }
+
+  .error-state.active { display: flex; }
+
+  .error-state svg { width: 44px; height: 44px; color: var(--danger); margin-bottom: 4px; }
+  .error-state h2 { font-size: 17px; font-weight: 700; }
+  .error-state p { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+
+  .error-fallback-btn {
+    margin-top: 8px; padding: 14px 28px;
+    border-radius: 12px; border: none;
+    background: var(--accent); color: #0a0a0f;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+
+  /* ═══ PREVIEW SCREEN ═══ */
+  .preview-screen { background: var(--bg); }
+
+  .preview-top {
+    padding: 16px; display: flex;
+    align-items: center; gap: 10px;
+  }
+
+  .back-btn {
+    width: 40px; height: 40px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); display: flex;
+    align-items: center; justify-content: center; cursor: pointer;
+  }
+
+  .back-btn svg { width: 20px; height: 20px; }
+
+  .preview-title { font-size: 16px; font-weight: 600; }
+
+  .preview-badge {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    padding: 5px 10px; border-radius: 20px;
+    background: var(--accent-dim); color: var(--accent);
+  }
+
+  .preview-img-wrap {
+    flex: 1; display: flex; align-items: center;
+    justify-content: center; padding: 8px 16px; overflow: hidden;
+  }
+
+  .preview-img-wrap img {
+    max-width: 100%; max-height: 65vh;
+    border-radius: 12px; object-fit: contain;
+  }
+
+  .preview-meta {
+    padding: 0 16px; display: flex;
+    gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+  }
+
+  .meta-chip {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--text-dim);
+    background: var(--surface); padding: 5px 10px;
+    border-radius: 8px; border: 1px solid var(--border);
+  }
+
+  .preview-actions {
+    display: flex; gap: 12px;
+    padding: 12px 16px max(20px, env(safe-area-inset-bottom));
+  }
+
+  .btn {
+    flex: 1; padding: 16px; border-radius: 12px;
+    font-family: 'DM Sans', sans-serif; font-size: 15px;
+    font-weight: 600; border: none; cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .btn:active { transform: scale(0.97); }
+  .btn-ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn-primary { background: var(--accent); color: #0a0a0f; }
+
+  /* Upload overlay */
+  .upload-overlay {
+    position: fixed; inset: 0;
+    background: rgba(10,10,15,0.95);
+    display: none; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 20px; z-index: 50;
+  }
+
+  .upload-overlay.active { display: flex; }
+
+  .spinner {
+    width: 48px; height: 48px;
+    border: 3px solid rgba(255,255,255,0.08);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .upload-msg { font-size: 14px; color: var(--text-dim); }
+
+  .done-wrap {
+    display: none; flex-direction: column;
+    align-items: center; gap: 14px; text-align: center;
+  }
+
+  .done-wrap.active { display: flex; }
+  .done-wrap svg { width: 56px; height: 56px; color: var(--accent); }
+  .done-wrap p { font-size: 17px; font-weight: 600; }
+
+  .done-btn {
+    margin-top: 8px; padding: 14px 36px; border-radius: 12px;
+    background: var(--accent); color: #0a0a0f;
+    font-family: 'DM Sans', sans-serif; font-size: 15px;
+    font-weight: 600; border: none; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══ CAMERA SCREEN ═══ -->
+<div id="cameraScreen" class="screen active">
+  <video id="videoFeed" autoplay playsinline muted></video>
+
+  <div class="flash-overlay" id="flash"></div>
+
+  <!-- Dark mask around boundary -->
+  <div class="mask-overlay">
+    <div class="mask-top"></div>
+    <div class="mask-bottom"></div>
+    <div class="mask-left"></div>
+    <div class="mask-right"></div>
+  </div>
+
+  <!-- Boundary box -->
+  <div class="boundary-box">
+    <div class="bbox-border"></div>
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+    <div class="crosshair-h"></div>
+    <div class="crosshair-v"></div>
+    <div class="bbox-label">Fit rack inside</div>
+    <div class="bbox-sublabel">Align rack edges with the boundary</div>
+  </div>
+
+  <!-- Condition pills -->
+  <div class="cond-bar" id="condBar"></div>
+
+  <!-- Condition detail popup -->
+  <div class="cond-detail" id="condDetail">
+    <div class="detail-tag" id="detailTag"></div>
+    <div class="detail-desc" id="detailDesc"></div>
+  </div>
+
+  <!-- Bottom capture controls -->
+  <div class="bottom-controls">
+    <div class="status-text pending" id="statusText">Tap conditions above to confirm</div>
+    <button class="capture-btn" id="captureBtn" disabled onclick="capturePhoto()"></button>
+  </div>
+
+  <!-- Error fallback -->
+  <div class="error-state" id="errorState">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <h2>Camera Access Needed</h2>
+    <p>Camera requires HTTPS. Host this file on a server or use the fallback below to pick a photo from your gallery.</p>
+    <input type="file" id="fallbackInput" accept="image/*" capture="environment" style="display:none">
+    <button class="error-fallback-btn" onclick="document.getElementById('fallbackInput').click()">Open Camera (Native)</button>
+  </div>
+</div>
+
+<!-- ═══ PREVIEW SCREEN ═══ -->
+<div id="previewScreen" class="screen preview-screen">
+  <div class="preview-top">
+    <button class="back-btn" onclick="goBack()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div class="preview-title">Review Photo</div>
+    <div class="preview-badge">Ready</div>
+  </div>
+  <div class="preview-img-wrap">
+    <img id="previewImg" src="" alt="Captured photo">
+  </div>
+  <div class="preview-meta" id="metaInfo"></div>
+  <div class="preview-actions">
+    <button class="btn btn-ghost" onclick="goBack()">Retake</button>
+    <button class="btn btn-primary" onclick="uploadPhoto()">Upload</button>
+  </div>
+</div>
+
+<!-- Upload overlay -->
+<div class="upload-overlay" id="uploadOverlay">
+  <div id="spinWrap">
+    <div class="spinner"></div>
+    <p class="upload-msg" style="margin-top:16px">Uploading image...</p>
+  </div>
+  <div class="done-wrap" id="doneWrap">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+    <p>Upload Complete!</p>
+    <button class="done-btn" onclick="resetApp()">Capture Another</button>
+  </div>
+</div>
+
+<canvas id="captureCanvas" style="display:none;"></canvas>
+
+<script>
+  var conditions = [
+    { id: 'align',    tag: 'Alignment',  desc: 'Hold phone perfectly straight, perpendicular to the rack — no tilt, front-facing view only.' },
+    { id: 'frame',    tag: 'Framing',    desc: 'Entire rack fits inside the boundary box — top to bottom, no cropped rails, edges, or units.' },
+    { id: 'quality',  tag: 'Quality',    desc: 'High resolution image — no blur, noise, or compression artifacts.' },
+    { id: 'lighting', tag: 'Lighting',   desc: 'Uniform lighting across the rack — no shadows, reflections, or overexposed areas.' },
+    { id: 'steady',   tag: 'Stability',  desc: 'Hold camera completely steady — do not capture while moving to avoid motion blur.' },
+    { id: 'distance', tag: 'Distance',   desc: 'Stand so the rack fills most of the boundary box — ports and unit details should still be clearly visible.' }
+  ];
+
+  var total = conditions.length;
+  var checked = {};
+  var checkedCount = 0;
+  var activeDetail = null;
+  var stream = null;
+  var detailTimeout = null;
+
+  var condBar = document.getElementById('condBar');
+  var condDetail = document.getElementById('condDetail');
+  var captureBtn = document.getElementById('captureBtn');
+  var statusText = document.getElementById('statusText');
+
+  // Build condition pills
+  conditions.forEach(function(c) {
+    var pill = document.createElement('div');
+    pill.className = 'cond-pill';
+    pill.setAttribute('data-id', c.id);
+    pill.innerHTML = '<div class="pill-dot"></div><span class="pill-label">' + c.tag + '</span>';
+
+    pill.addEventListener('click', function(e) {
+      e.stopPropagation();
+
+      // If tapping same pill that's showing detail, toggle check
+      if (activeDetail === c.id) {
+        toggleCheck(c.id, pill);
+        hideDetail();
+        return;
+      }
+
+      // Show detail for this condition
+      showDetail(c);
+      activeDetail = c.id;
+
+      // Auto-hide after 3 seconds
+      clearTimeout(detailTimeout);
+      detailTimeout = setTimeout(function() { hideDetail(); }, 3000);
+    });
+
+    // Long press to toggle
+    var pressTimer;
+    pill.addEventListener('touchstart', function(e) {
+      pressTimer = setTimeout(function() {
+        toggleCheck(c.id, pill);
+        hideDetail();
+      }, 500);
+    });
+    pill.addEventListener('touchend', function() { clearTimeout(pressTimer); });
+
+    condBar.appendChild(pill);
+  });
+
+  function showDetail(c) {
+    document.getElementById('detailTag').textContent = c.tag;
+    document.getElementById('detailDesc').textContent = c.desc;
+    condDetail.classList.add('visible');
+  }
+
+  function hideDetail() {
+    condDetail.classList.remove('visible');
+    activeDetail = null;
+  }
+
+  // Tap detail box to confirm that condition
+  condDetail.addEventListener('click', function() {
+    if (activeDetail) {
+      var pill = condBar.querySelector('[data-id="' + activeDetail + '"]');
+      if (pill) toggleCheck(activeDetail, pill);
+      hideDetail();
+    }
+  });
+
+  // Tap anywhere else to hide detail
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.cond-pill') && !e.target.closest('.cond-detail')) {
+      hideDetail();
+    }
+  });
+
+  function toggleCheck(id, pill) {
+    if (checked[id]) {
+      delete checked[id];
+      pill.classList.remove('checked');
+      checkedCount--;
+    } else {
+      checked[id] = true;
+      pill.classList.add('checked');
+      checkedCount++;
+    }
+    updateUI();
+  }
+
+  function updateUI() {
+    if (checkedCount === total) {
+      statusText.textContent = 'All conditions met — capture now';
+      statusText.className = 'status-text ready';
+      captureBtn.disabled = false;
+      captureBtn.classList.add('enabled');
+    } else {
+      var rem = total - checkedCount;
+      statusText.textContent = rem + ' condition' + (rem > 1 ? 's' : '') + ' remaining — tap to confirm';
+      statusText.className = 'status-text pending';
+      captureBtn.disabled = true;
+      captureBtn.classList.remove('enabled');
+    }
+  }
+
+  // ── Camera ──
+  function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showError();
+      return;
+    }
+
+    navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 3840 },
+        height: { ideal: 2160 }
+      },
+      audio: false
+    }).then(function(s) {
+      stream = s;
+      document.getElementById('videoFeed').srcObject = s;
+    }).catch(function() {
+      showError();
+    });
+  }
+
+  function showError() {
+    document.getElementById('errorState').classList.add('active');
+  }
+
+  // Fallback file input
+  document.getElementById('fallbackInput').addEventListener('change', function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    showPreviewFromFile(file);
+  });
+
+  // ── Capture ──
+  function capturePhoto() {
+    var video = document.getElementById('videoFeed');
+    var canvas = document.getElementById('captureCanvas');
+    var flash = document.getElementById('flash');
+
+    flash.classList.add('flash');
+    setTimeout(function() { flash.classList.remove('flash'); }, 150);
+
+    var w = video.videoWidth;
+    var h = video.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, w, h);
+
+    canvas.toBlob(function(blob) {
+      var url = URL.createObjectURL(blob);
+      document.getElementById('previewImg').src = url;
+
+      var meta = document.getElementById('metaInfo');
+      meta.innerHTML = '';
+      addChip(meta, (blob.size / (1024 * 1024)).toFixed(1) + ' MB');
+      addChip(meta, 'JPEG');
+      addChip(meta, w + ' x ' + h + ' px');
+
+      switchScreen('previewScreen');
+
+      // Store blob for upload
+      window._capturedBlob = blob;
+    }, 'image/jpeg', 0.95);
+  }
+
+  function showPreviewFromFile(file) {
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+      document.getElementById('previewImg').src = ev.target.result;
+
+      var meta = document.getElementById('metaInfo');
+      meta.innerHTML = '';
+      addChip(meta, (file.size / (1024 * 1024)).toFixed(1) + ' MB');
+      var ext = file.type.split('/')[1] || 'unknown';
+      addChip(meta, ext.toUpperCase());
+
+      var img = new Image();
+      img.onload = function() {
+        addChip(meta, img.naturalWidth + ' x ' + img.naturalHeight + ' px');
+      };
+      img.src = ev.target.result;
+
+      window._capturedFile = file;
+      switchScreen('previewScreen');
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function addChip(container, text) {
+    var chip = document.createElement('span');
+    chip.className = 'meta-chip';
+    chip.textContent = text;
+    container.appendChild(chip);
+  }
+
+  function switchScreen(id) {
+    var screens = document.querySelectorAll('.screen');
+    for (var i = 0; i < screens.length; i++) screens[i].classList.remove('active');
+    document.getElementById(id).classList.add('active');
+  }
+
+  function goBack() {
+    switchScreen('cameraScreen');
+  }
+
+  function uploadPhoto() {
+    var overlay = document.getElementById('uploadOverlay');
+    var spinWrap = document.getElementById('spinWrap');
+    var doneWrap = document.getElementById('doneWrap');
+
+    overlay.classList.add('active');
+    spinWrap.style.display = 'block';
+    doneWrap.classList.remove('active');
+
+    // ── Replace with your actual upload endpoint ──
+    // var formData = new FormData();
+    // var imageData = window._capturedBlob || window._capturedFile;
+    // formData.append('rack_image', imageData, 'rack.jpg');
+    // fetch('https://your-api.com/upload', { method: 'POST', body: formData })
+    //   .then(function(r) { return r.json(); })
+    //   .then(function(d) { /* done */ });
+
+    setTimeout(function() {
+      spinWrap.style.display = 'none';
+      doneWrap.classList.add('active');
+    }, 2000);
+  }
+
+  function resetApp() {
+    document.getElementById('uploadOverlay').classList.remove('active');
+    checked = {};
+    checkedCount = 0;
+    var pills = document.querySelectorAll('.cond-pill');
+    for (var i = 0; i < pills.length; i++) pills[i].classList.remove('checked');
+    updateUI();
+    switchScreen('cameraScreen');
+  }
+
+  // Init
+  startCamera();
+  updateUI();
+</script>
+</body>
+</html>
